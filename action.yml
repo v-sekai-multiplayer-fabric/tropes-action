@@ -1,0 +1,19 @@
+name: "Tropes check"
+description: "Static, no-LLM check for AI-writing tells (https://tropes.fyi/) in Markdown / Quarto."
+author: "V-Sekai / chibifire"
+branding:
+  icon: "eye"
+  color: "purple"
+
+inputs:
+  paths:
+    description: "Space-separated git pathspecs to scan (default: all Markdown and Quarto files)."
+    required: false
+    default: "*.md *.qmd"
+
+runs:
+  using: composite
+  steps:
+    - name: Run tropes check
+      shell: bash
+      run: "$GITHUB_ACTION_PATH/check_tropes.sh" ${{ inputs.paths }}

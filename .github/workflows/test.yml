@@ -1,0 +1,27 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  selftest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: clean fixture passes
+        run: ./check_tropes.sh 'tests/good.md'
+
+      - name: dirty fixture is flagged (expected failure)
+        run: |
+          if ./check_tropes.sh 'tests/bad.md'; then
+            echo "::error::tests/bad.md should have been flagged but passed"
+            exit 1
+          fi
+          echo "tests/bad.md correctly flagged"
+
+      - name: action runs as a composite action
+        uses: ./
+        with:
+          paths: "tests/good.md"
