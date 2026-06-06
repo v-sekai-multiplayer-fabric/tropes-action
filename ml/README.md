@@ -32,7 +32,7 @@ action runtime, so the base action stays a fast, dependency-free `bash` check.
 downloads them only when called with `ml: true`:
 
 ```yaml
-- uses: v-sekai-multiplayer-fabric/tropes-action@v1
+- uses: v-sekai-multiplayer-fabric/tropes-action@main # pre-release; no vN tag yet
   with:
     ml: true # advisory; never fails the build
     ml-threshold: "0.6"

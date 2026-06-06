@@ -29,11 +29,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: v-sekai-multiplayer-fabric/tropes-action@v1
+      - uses: v-sekai-multiplayer-fabric/tropes-action@main
         # optional: restrict what gets scanned (git pathspecs)
         # with:
         #   paths: "docs/**/*.md *.qmd"
 ```
+
+> Pre-release: track `@main` (or pin a commit SHA) for now. A `vN` tag is cut
+> only after the action clears staging, beta, and a release candidate.
 
 | Input          | Default      | Description                                                            |
 | -------------- | ------------ | ---------------------------------------------------------------------- |
