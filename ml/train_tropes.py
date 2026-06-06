@@ -1,76 +1,29 @@
 # SPDX-License-Identifier: MIT
 """
-Train an EXPLAINABLE tropes classifier and emit an ONNX-exportable pipeline.
+Train an FT-Transformer tropes classifier with AutoGluon MultiModal.
 
-Two things happen here:
+FT-Transformer (attention over per-feature tokens) is interpretable deep
+learning, and AutoGluon exports it to ONNX natively (MultiModalPredictor.
+export_onnx) — so there is NO skl2onnx and NO hand-rolled torch.onnx. Features
+are the compact named set in features.py (typography + byte stats + tell counts),
+so attention / feature-importance maps to human-named columns.
 
-  1. AutoGluon Tabular with `presets="interpretable"` fits rule-based models
-     (imodels) on the synthesized data and prints the learned rules — this is the
-     human-readable "why" we keep in the run log / EXPLAIN.md. AutoGluon also
-     gives a leaderboard so we know the signal is real before shipping.
-
-  2. The DEPLOYED model is a small, fully ONNX-exportable and inherently
-     explainable sklearn pipeline: word+char n-gram TF-IDF -> LogisticRegression.
-     Its coefficients map every n-gram to a signed weight, so at inference we can
-     point at the exact phrases that drove a flag (see tropes_ml.py).
-
-Inputs:  data/tropes.parquet  ([text, label])
-Outputs: models/pipeline.joblib, models/explain.json (vocab -> weight, intercept)
+Inputs:  data/tropes.parquet ([text, label])
+Outputs: models/mm_ft/ (the predictor), models/feature_importance.json,
+         models/feature_names.json
 """
 import json
 import os
 import sys
-import joblib
-import numpy as np
 import pandas as pd
 
-
-def train_sklearn(df):
-    from sklearn.pipeline import Pipeline
-    from sklearn.feature_extraction.text import TfidfVectorizer
-    from sklearn.linear_model import LogisticRegression
-
-    # Word n-grams only. skl2onnx fully supports analyzer="word" TF-IDF but NOT
-    # char_wb ("CountVectorizer cannot be converted, only tokenizer='word' is
-    # fully supported"), so a char vectorizer breaks the ONNX export. Word
-    # n-grams still give explainable, phrase-level hits.
-    feats = TfidfVectorizer(analyzer="word", ngram_range=(1, 3),
-                            min_df=2, sublinear_tf=True, lowercase=True)
-    clf = LogisticRegression(max_iter=2000, class_weight="balanced", C=4.0)
-    pipe = Pipeline([("feats", feats), ("clf", clf)])
-    pipe.fit(df["text"].tolist(), df["label"].values)
-    return pipe
+import features as F
 
 
-def dump_explanations(pipe, path):
-    """Flatten the linear coefficients to a {feature: weight} table so the
-    runtime can attribute a score to specific n-grams without sklearn."""
-    feats = pipe.named_steps["feats"]
-    clf = pipe.named_steps["clf"]
-    names = feats.get_feature_names_out()
-    coef = clf.coef_[0]
-    # Keep only the meaningfully-weighted features to keep the file small.
-    keep = {n: round(float(w), 5) for n, w in zip(names, coef) if abs(w) > 0.05}
-    payload = {"intercept": float(clf.intercept_[0]), "weights": keep}
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump(payload, fh, ensure_ascii=False)
-    top = sorted(keep.items(), key=lambda kv: -kv[1])[:15]
-    print("top AI-tell n-grams:", ", ".join(f"{k!r}({v:+.2f})" for k, v in top))
-
-
-def autogluon_rules(df):
-    """Best-effort: print AutoGluon's interpretable rule models for the log.
-    Never fatal — the deployed model is the sklearn pipeline above."""
-    try:
-        from autogluon.tabular import TabularPredictor
-        pred = TabularPredictor(label="label", problem_type="binary",
-                                eval_metric="f1", path="models/ag_interpretable")
-        pred.fit(df, presets="interpretable", time_limit=600, verbosity=1)
-        print(pred.leaderboard(silent=True).to_string())
-        if hasattr(pred, "print_interpretable_models"):
-            pred.print_interpretable_models()
-    except Exception as e:  # autogluon optional in some envs
-        print(f"[autogluon interpretable step skipped: {e}]", file=sys.stderr)
+def to_frame(df):
+    tab = pd.DataFrame(F.matrix(df["text"].tolist()), columns=F.FEATURE_NAMES)
+    tab["label"] = df["label"].to_numpy()
+    return tab
 
 
 def main():
@@ -78,12 +31,34 @@ def main():
     if df.label.nunique() < 2:
         print("need both classes to train; aborting", file=sys.stderr)
         sys.exit(2)
+
+    tab = to_frame(df)
+    print(f"train frame: {tab.shape} ({len(F.FEATURE_NAMES)} named features)")
+
+    from autogluon.multimodal import MultiModalPredictor
     os.makedirs("models", exist_ok=True)
-    pipe = train_sklearn(df)
-    joblib.dump(pipe, "models/pipeline.joblib")
-    dump_explanations(pipe, "models/explain.json")
-    print("wrote models/pipeline.joblib + models/explain.json")
-    autogluon_rules(df)
+    pred = MultiModalPredictor(label="label", problem_type="binary",
+                               eval_metric="f1", path="models/mm_ft")
+    # Force the FT-Transformer tabular backbone (no text/image columns here).
+    pred.fit(tab, hyperparameters={"model.names": ["ft_transformer"]},
+             time_limit=900)
+
+    with open("models/feature_names.json", "w") as fh:
+        json.dump(F.FEATURE_NAMES, fh)
+
+    # Interpretability: permutation feature importance over the named columns.
+    try:
+        fi = pred.feature_importance(tab)
+        fi_d = {k: float(v) for k, v in fi["importance"].items()} if "importance" in getattr(fi, "columns", []) \
+            else {str(k): float(v) for k, v in dict(fi).items()}
+        with open("models/feature_importance.json", "w") as fh:
+            json.dump(fi_d, fh)
+        top = sorted(fi_d.items(), key=lambda kv: -kv[1])[:12]
+        print("top features:", ", ".join(f"{k}({v:+.3f})" for k, v in top))
+    except Exception as e:
+        print(f"[feature_importance skipped: {e}]", file=sys.stderr)
+
+    print("trained -> models/mm_ft")
 
 
 if __name__ == "__main__":

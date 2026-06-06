@@ -1,10 +1,8 @@
-# Training + export (CI only). Heavy; not needed at action runtime.
-autogluon.tabular[all]
-imodels
-scikit-learn
-skl2onnx
-onnx
-onnxruntime
+# Training + export (CI only). AutoGluon MultiModal provides FT-Transformer and
+# its NATIVE ONNX export (MultiModalPredictor.export_onnx) — no skl2onnx.
+autogluon.multimodal
 pandas
 pyarrow
-joblib
+numpy
+onnx
+onnxruntime

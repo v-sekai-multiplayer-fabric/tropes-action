@@ -1,59 +1,75 @@
 # SPDX-License-Identifier: MIT
 """
-Torch-free ONNX tropes scorer: onnxruntime + numpy only (mirrors
-jobs-lazy-onboarding/embed.py). Scores Markdown prose for AI-tell likelihood on
-the CPU, and — because the deployed model is linear over n-grams — attributes
-each flag to the specific phrases that drove it (explain.json).
+CPU-ONNX tropes scorer for the FT-Transformer model. Featurizes each prose line
+into the named feature set (features.py), runs the AutoGluon-exported ONNX graph
+on the CPU, and explains a flag via the globally most-important features that are
+active on that line (feature_importance.json) plus any typographic tells.
 
-This is the ADVISORY layer: it prints warnings, it does not fail the build (the
-static check_tropes.sh stays the deterministic gate). The model is fetched
-lazily: pass --model-dir pointing at a downloaded onnx_tropes/, or the CI/action
-places it next to this file.
+Advisory only — prints warnings, never fails the build. Model fetched lazily by
+the action; pass --model-dir to a folder with model.onnx + feature_names.json
+(+ optional feature_importance.json, io.json).
 
-Usage:
-  python tropes_ml.py --model-dir onnx_tropes [--threshold 0.6] [files...]
+Usage: python tropes_ml.py --model-dir onnx_tropes [--threshold 0.6] [files...]
 """
 import argparse
 import json
 import os
-import re
 import subprocess
 import sys
+import numpy as np
 
-# Provider preference: cross-vendor GPU first, CPU always available — same order
-# as jobs-lazy-onboarding so the action accelerates anywhere but never requires it.
+import features as F
+
 _PROVIDER_PREF = ["CoreMLExecutionProvider", "DmlExecutionProvider",
                   "VulkanExecutionProvider", "WebGpuExecutionProvider",
                   "ROCMExecutionProvider", "CUDAExecutionProvider",
                   "CPUExecutionProvider"]
+_TYPO_FEATURES = [n for n in F.FEATURE_NAMES if n.startswith("cp_") or n == "emoji_per100"]
 
 
 class TropesModel:
     def __init__(self, model_dir):
-        import numpy as np
         import onnxruntime as ort
-        self.np = np
         avail = set(ort.get_available_providers())
         providers = [p for p in _PROVIDER_PREF if p in avail] or ["CPUExecutionProvider"]
         self.sess = ort.InferenceSession(os.path.join(model_dir, "model.onnx"),
                                          providers=providers)
-        self.in_name = self.sess.get_inputs()[0].name
-        with open(os.path.join(model_dir, "explain.json"), encoding="utf-8") as fh:
-            ex = json.load(fh)
-        # Positive-weight n-grams only, longest first, for phrase attribution.
-        self.weights = {k: v for k, v in ex["weights"].items() if v > 0}
+        self.inputs = self.sess.get_inputs()
+        imp_path = os.path.join(model_dir, "feature_importance.json")
+        self.importance = {}
+        if os.path.exists(imp_path):
+            with open(imp_path) as fh:
+                self.importance = json.load(fh)
+
+    def _feed(self, X):
+        # FT-Transformer ONNX with all-numeric input is typically a single float
+        # tensor [batch, n_features]; introspect to stay robust to the signature.
+        floats = [i for i in self.inputs if "float" in str(i.type)]
+        if len(self.inputs) == 1 and floats:
+            return {self.inputs[0].name: X}
+        # Fallback: map any single float input to the feature matrix.
+        if floats:
+            return {floats[0].name: X}
+        raise RuntimeError(f"unexpected ONNX inputs: {[i.name for i in self.inputs]}")
 
     def score(self, texts):
-        arr = self.np.array([[t] for t in texts], dtype=object)
-        res = self.sess.run(None, {self.in_name: arr})
-        proba = next(r for r in res if getattr(r, "ndim", 0) == 2 and r.shape[1] == 2)
+        X = F.matrix(texts)
+        res = self.sess.run(None, self._feed(X))
+        proba = next((r for r in res if getattr(r, "ndim", 0) == 2 and r.shape[1] == 2), None)
+        if proba is None:
+            proba = res[0]
         return proba[:, 1]
 
-    def attribute(self, text, k=4):
-        low = text.lower()
-        hits = [(ng, w) for ng, w in self.weights.items() if ng.strip() and ng in low]
-        hits.sort(key=lambda kv: -kv[1])
-        return [ng.strip() for ng, _ in hits[:k]]
+    def why(self, text):
+        vec = dict(zip(F.FEATURE_NAMES, F.extract(text)))
+        active = {k: v for k, v in vec.items() if v}
+        # Rank active features by global importance (fallback: by value).
+        ranked = sorted(active, key=lambda k: -(self.importance.get(k, 0.0) or active[k]))
+        bits = [f"{k}={active[k]:.2g}" for k in ranked[:4]]
+        typo = [k for k in _TYPO_FEATURES if vec.get(k)]
+        if typo:
+            bits.append("typo:" + ",".join(t.replace("cp_", "") for t in typo))
+        return "  (" + "; ".join(bits) + ")" if bits else ""
 
 
 def _prose_lines(path):
@@ -89,12 +105,10 @@ def main():
         scores = model.score([s for _, s in rows])
         for (lineno, s), p in zip(rows, scores):
             if p >= a.threshold:
-                why = model.attribute(s)
-                because = f"  (phrases: {', '.join(why)})" if why else ""
-                print(f"tropes-ml: {f}:{lineno}: p(AI-tell)={p:.2f}{because}")
+                print(f"tropes-ml: {f}:{lineno}: p(AI-tell)={p:.2f}{model.why(s)}")
                 flagged += 1
     print(f"[tropes-ml] advisory: {flagged} line(s) above {a.threshold:.2f}")
-    return 0  # advisory: never fails the build
+    return 0
 
 
 if __name__ == "__main__":

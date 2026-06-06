@@ -65,6 +65,16 @@ def _strip_md(line: str) -> str:
     return line.strip()
 
 
+def _typo_positive(s: str) -> str:
+    """Inject the typography LLMs reach for, turning a clean line into a positive
+    so the byte model learns the smart-quote / dash / ellipsis / emoji tells."""
+    s = s.replace("'", "’")                 # ' -> ’
+    s = re.sub(r'"([^"]+)"', "“\\1”", s)  # "x" -> “x”
+    s = re.sub(r"\s-\s", " — ", s)          # - -> em dash
+    s = s.replace("...", "…")               # ... -> …
+    return s + " ✨"                          # trailing sparkle emoji
+
+
 def harvest():
     pos, neg = set(), set()
     # 1. Every removed/added line across markdown history (the curated edits).
@@ -90,6 +100,12 @@ def harvest():
         except OSError:
             pass
     pos.discard(""); neg.discard("")
+    # Typography augmentation: turn a deterministic sample of clean lines into
+    # positives by injecting LLM punctuation, so the byte model learns those tells.
+    import random
+    rng = random.Random(0)
+    for s in (rng.sample(sorted(neg), min(len(neg), 250)) if neg else []):
+        pos.add(_typo_positive(s))
     neg -= pos
     rows = [{"text": t, "label": 1} for t in pos] + [{"text": t, "label": 0} for t in neg]
     return pd.DataFrame(rows)
