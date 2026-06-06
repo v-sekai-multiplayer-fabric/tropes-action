@@ -29,15 +29,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: v-sekai-multiplayer-fabric/tropes-action@v1
+      - uses: v-sekai-multiplayer-fabric/tropes-action@main
         # optional: restrict what gets scanned (git pathspecs)
         # with:
         #   paths: "docs/**/*.md *.qmd"
 ```
 
-| Input   | Default        | Description                              |
-| ------- | -------------- | ---------------------------------------- |
-| `paths` | `*.md *.qmd`   | Space-separated git pathspecs to scan.   |
+> Pre-release: track `@main` (or pin a commit SHA) for now. A `vN` tag is cut
+> only after the action clears the dev, beta, and rc (release candidate) stages.
+
+| Input          | Default      | Description                                                            |
+| -------------- | ------------ | ---------------------------------------------------------------------- |
+| `paths`        | `*.md *.qmd` | Space-separated git pathspecs to scan.                                 |
+| `ml`           | `false`      | Also run the advisory ONNX classifier (lazy-fetched, CPU, non-blocking). |
+| `ml-threshold` | `0.6`        | `p(AI-tell)` threshold for the advisory ML pass.                       |
+
+The regex rules are the deterministic pass/fail gate. With `ml: true` the action
+also lazy-downloads a small AutoGluon-trained, ONNX-exported classifier and scores
+prose on the CPU, printing warnings (with the phrases that drove each flag) without
+failing the build. See [`ml/`](ml/README.md).
 
 ## Run locally / as a pre-commit hook
 
