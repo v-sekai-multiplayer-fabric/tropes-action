@@ -26,16 +26,16 @@ import pandas as pd
 
 
 def train_sklearn(df):
-    from sklearn.pipeline import FeatureUnion, Pipeline
+    from sklearn.pipeline import Pipeline
     from sklearn.feature_extraction.text import TfidfVectorizer
     from sklearn.linear_model import LogisticRegression
 
-    feats = FeatureUnion([
-        ("word", TfidfVectorizer(analyzer="word", ngram_range=(1, 3),
-                                 min_df=2, sublinear_tf=True, lowercase=True)),
-        ("char", TfidfVectorizer(analyzer="char_wb", ngram_range=(3, 5),
-                                 min_df=3, sublinear_tf=True, lowercase=True)),
-    ])
+    # Word n-grams only. skl2onnx fully supports analyzer="word" TF-IDF but NOT
+    # char_wb ("CountVectorizer cannot be converted, only tokenizer='word' is
+    # fully supported"), so a char vectorizer breaks the ONNX export. Word
+    # n-grams still give explainable, phrase-level hits.
+    feats = TfidfVectorizer(analyzer="word", ngram_range=(1, 3),
+                            min_df=2, sublinear_tf=True, lowercase=True)
     clf = LogisticRegression(max_iter=2000, class_weight="balanced", C=4.0)
     pipe = Pipeline([("feats", feats), ("clf", clf)])
     pipe.fit(df["text"].tolist(), df["label"].values)

@@ -21,7 +21,16 @@ jobs:
           fi
           echo "tests/bad.md correctly flagged"
 
-      - name: action runs as a composite action
+      - name: action runs as a composite action (regex gate)
         uses: ./
         with:
           paths: "tests/good.md"
+
+      # Exercise the advisory ML path end to end. If no model-latest release is
+      # published yet, the action prints a notice and the step still passes
+      # (advisory, never blocking) — so this is safe before/after the model exists.
+      - name: action runs with ml advisory pass
+        uses: ./
+        with:
+          paths: "tests/good.md"
+          ml: true
