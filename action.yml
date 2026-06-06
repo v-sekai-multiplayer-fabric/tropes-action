@@ -10,10 +10,43 @@ inputs:
     description: "Space-separated git pathspecs to scan (default: all Markdown and Quarto files)."
     required: false
     default: "*.md *.qmd"
+  ml:
+    description: "Also run the advisory ONNX classifier (lazy-fetched on the CPU). Non-blocking."
+    required: false
+    default: "false"
+  ml-threshold:
+    description: "p(AI-tell) threshold for the advisory ML pass."
+    required: false
+    default: "0.6"
 
 runs:
   using: composite
   steps:
+    # Deterministic gate — the regex rules decide pass/fail.
     - name: Run tropes check
       shell: bash
-      run: "$GITHUB_ACTION_PATH/check_tropes.sh" ${{ inputs.paths }}
+      env:
+        PATHS: ${{ inputs.paths }}
+      run: |
+        set -f   # word-split $PATHS but DON'T glob-expand it; git interprets the pathspecs
+        bash "$GITHUB_ACTION_PATH/check_tropes.sh" $PATHS
+
+    # Advisory ML layer (opt-in). Lazy-fetches the latest ONNX model and scores
+    # prose on the CPU; prints warnings with the phrases that drove each flag and
+    # never fails the build (mirrors jobs-lazy-onboarding's torch-free runtime).
+    - name: Advisory ONNX classifier
+      if: inputs.ml == 'true'
+      shell: bash
+      run: |
+        set -e
+        dir="$GITHUB_ACTION_PATH/onnx_tropes"
+        mkdir -p "$dir"
+        base="https://github.com/v-sekai-multiplayer-fabric/tropes-action/releases/latest/download"
+        if ! curl -fsSL "$base/model.onnx" -o "$dir/model.onnx"; then
+          echo "::notice::no published tropes model yet; skipping advisory pass"
+          exit 0
+        fi
+        curl -fsSL "$base/explain.json" -o "$dir/explain.json" || true
+        python -m pip install --quiet -r "$GITHUB_ACTION_PATH/ml/requirements-runtime.txt"
+        python "$GITHUB_ACTION_PATH/ml/tropes_ml.py" \
+          --model-dir "$dir" --threshold "${{ inputs.ml-threshold }}"

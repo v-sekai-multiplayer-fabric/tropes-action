@@ -1,0 +1,46 @@
+name: train-model
+
+# Synthesize labels from git history, train the explainable tropes classifier
+# with AutoGluon, export to ONNX, and publish model.onnx + explain.json as the
+# `model-latest` release the action lazy-fetches at runtime. Manual + monthly.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 1 * *" # 06:00 UTC on the 1st
+
+permissions:
+  contents: write
+
+jobs:
+  train:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history — synth_from_history.py mines diffs
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install training deps
+        run: pip install -r ml/requirements-train.txt
+
+      - name: Synthesize dataset from git history
+        run: python ml/synth_from_history.py
+
+      - name: Train (AutoGluon interpretable + ONNX-exportable linear pipeline)
+        run: python ml/train_tropes.py
+
+      - name: Export + validate ONNX
+        run: python ml/export_onnx.py
+
+      - name: Publish model-latest release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: model-latest
+          name: tropes model (latest)
+          files: |
+            onnx_tropes/model.onnx
+            onnx_tropes/explain.json

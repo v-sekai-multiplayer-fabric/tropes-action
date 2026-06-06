@@ -1,0 +1,10 @@
+# Training + export (CI only). Heavy; not needed at action runtime.
+autogluon.tabular[all]
+imodels
+scikit-learn
+skl2onnx
+onnx
+onnxruntime
+pandas
+pyarrow
+joblib
