@@ -36,7 +36,7 @@ jobs:
 ```
 
 > Pre-release: track `@main` (or pin a commit SHA) for now. A `vN` tag is cut
-> only after the action clears staging, beta, and a release candidate.
+> only after the action clears the dev, beta, and rc (release candidate) stages.
 
 | Input          | Default      | Description                                                            |
 | -------------- | ------------ | ---------------------------------------------------------------------- |
